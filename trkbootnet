@@ -1,0 +1,52 @@
+#!/bin/bash
+ARGS="$*"
+grep -q trkinmem /proc/cmdline && echo "TRK running from RAM, TRK sources not available, exiting" && exit 1
+TRKMOUNTDIR=`cat /etc/trkmountdir`
+NUMIPS=`ifconfig | grep "inet addr" | grep -v 127.0.0.1| awk '{print $2}' | cut -d ":" -f 2 | wc -l `
+if [ $NUMIPS -gt 1 ]; then
+echo "More than one IP address found, not starting when multiple interfaces are active"
+echo "Bring down obsolete interfaces and rerun 'trkbootnet'"
+exit 1;
+fi;
+echo  "Making NFS share with files from CD where we can write stuff"
+TRKPXE=trkpxe
+cd $TRKMOUNTDIR
+mkdirhier /dev/shm/$TRKPXE/pxelinux.cfg
+mkdirhier /dev/shm/$TRKPXE/trk3
+cp -af $TRKMOUNTDIR/{kernel.trk,initrd.trk,vesamenu.c32,bootlogo.jpg,pxelinux.0,isolinux.cfg,syslinux.cfg,memdisk,memtest.x86} /dev/shm/$TRKPXE/
+cp -af $TRKMOUNTDIR/trk3/mkpxelinux /dev/shm/$TRKPXE/trk3
+IPADDR=`ifconfig | grep -v 127.0.0.1 | grep "inet addr" | awk '{print $2}' | cut -d ":" -f 2`
+NETMASK=`ifconfig | grep -v 127.0.0.1 | grep "inet addr" | awk '{print $4}' | cut -d ":" -f 2`
+BROADCAST=`ipcalc $IPADDR $NETMASK -b | cut -d "=" -f 2`
+NETWORK=`ipcalc $IPADDR $NETMASK -n | cut -d "=" -f 2`
+echo "cat /etc/proxydhcp.conf.template | sed -e s'/@IPADDR/$IPADDR/' | sed -e s'/@NETMASK/$NETMASK/' | sed -e s'/@BROADCAST/$BROADCAST/' | sed -e s'/@NETWORK/$NETWORK/' | sed -e s'/@TRKPXE/$TRKPXE/' > /etc/dhcpd.conf" > /tmp/.mkdhcpdconf
+sh /tmp/.mkdhcpdconf
+rm -f /tmp/.mkdhcpdconf
+TRKPXE=/dev/shm/$TRKPXE
+echo "Starting Proxy DHCP server"
+dhcpd
+echo "$TRKMOUNTDIR               *(ro,insecure,no_root_squash)" > /etc/exports
+/etc/init.d/portmap start
+/etc/init.d/nfs start
+echo "Making default PXELinux config file"
+cd $TRKPXE/trk3
+./mkpxelinux $IPADDR:$TRKMOUNTDIR $ARGS
+echo "Starting TFTP server"
+in.tftpd -s -l $TRKPXE &
+disown $!
+mount -a
+read -p "Do you want to set MClone as Standard Boot Option ? [y/N]" -n1 MCloneBoot
+echo ""
+case "$MCloneBoot" in
+    y)
+    echo "Set Default Boot Option to MClone Receiver!"
+    sed 's/default vesamenu.c32/default 3/g' -i $TRKPXE/isolinux.cfg
+    sed 's/default vesamenu.c32/default 3/g' -i $TRKPXE/syslinux.cfg
+    sed 's/default vesamenu.c32/default 3/g' -i $TRKPXE/pxelinux.cfg/default
+    ;;
+    N)
+    ;;
+    *)
+    ;;
+esac
+echo "Done, you can now start other TRK machines from your network"

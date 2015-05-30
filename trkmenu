@@ -1,0 +1,481 @@
+#!/bin/bash
+#set -x
+# Menu version 1.0 / 19 January 2010
+# This script creates a menu with submenus
+
+# The menu can be integrated in the script (example below), or loaded from an external file. In the first case run the script without parameter.
+# To load an external menu, give the path to the file as first (and only) parameter. 
+# The external file must have a content similar to the menu definition below (between the =========== lines). 
+# 
+# To create the menu add your menu lines with the command "addmenu"  
+#    Each command takes four arguments (the fourth is optional) : 
+#         1) The menu identifier
+#         2) The text of the menu
+#         3) The command itself (compound commands are allowed)
+#         4) An optional commentary. 
+#    In the commentary you can use the codes \n, \t and so on (see man echo for details). 
+
+# You can use colors in the menus and commentaries (examples below; create the colors you need with similar code in the section delimited by +++++)  
+# If you use the RESET command twice in a menu option the cursor will not be redrawned after the second occurence.  
+# To suppress the "Press any key to continue" message, add : 
+# eval NOSTOP=1; 
+# at the beginning of your command 
+# To change the menu, the function is : changeMenu with the menu identifier as first argument
+
+# Navigate the menu with up and down arrow keys
+# The left arrow key always go back to the main menu
+export TRKMENU=on
+BUILD=`cat /etc/build`
+
+# base color codes
+OPEN="\033[" # open color
+
+BLACKFG="${OPEN}30m" # black foreground
+REDFG="${OPEN}31m" # red foreground
+GREENFG="${OPEN}32m" # green foreground
+BROWNFG="${OPEN}33m" # brown foreground
+BLUEFG="${OPEN}34m" # blue foreground
+MAGNFG="${OPEN}35m" # magenta (purple) foreground
+CYANFG="${OPEN}36m" # cyan (light blue) foreground
+GRAYFG="${OPEN}37m" # gray foreground
+
+BLACKBG="${OPEN}40m" # black background
+REDBG="${OPEN}41m" # red background
+GREENBG="${OPEN}42m" # green background
+BROWNBG="${OPEN}43m" # brown background
+BLUEBG="${OPEN}44m" # blue background
+MAGNBG="${OPEN}45m" # magenta background
+CYANBG="${OPEN}46m" # cyan background
+WHITEBG="${OPEN}47m" # white background
+
+RESET="${OPEN}0m" # reset all attributes to their defaults
+BOLD="${OPEN}1m" # set bold
+BLINK="${OPEN}5m" # set blink
+REVID="${OPEN}7m" # set reverse video
+NORM="${OPEN}22m" # set normal intensity
+BLOFF="${OPEN}25m" # blink off
+REVOFF="${OPEN}27m" # reverse video off
+SEP=";" # color separator
+
+# ++++++++++++++++  Colors definitions +++++++++++++++++++++
+# Add the colors you need here
+
+# compound codes
+TITON="${BLUEFG}${BOLD}" # open title
+CURSAON="${BLUEBG}${GRAYFG}" # Main menu cursor color
+CURSBON="${BROWNBG}${GRAYFG}" # Other menus cursor color
+
+
+# ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+
+
+#uparrow=$'\x1b[A'
+#downarrow=$'\x1b[B'
+#leftarrow=$'\x1b[D'
+#rightarrow=$'\x1b[C'
+
+firstcode=$'\x1b'
+uparrow='A'
+downarrow='B'
+leftarrow='D'
+rightarrow='C'
+
+LINE=0
+LINEA=0
+CURSON=$CURSAON
+
+
+function addmenu {
+
+a='[${#menu'
+b='[*]}]'
+eval "menu${1}${a}${1}${b}=\$2"
+eval "menu${1}1${a}${1}${b}=\$3"
+eval "menu${1}2${a}${1}${b}=\$4"
+
+}
+
+
+
+
+function changeMenu {
+
+a='( "${menu'
+b='[@]}" )'
+
+eval "menu=${a}${1}${b}"
+eval "menu1=${a}${1}1${b}"
+eval "menu2=${a}${1}2${b}"
+
+
+if [ $1 = $MAINMENU ]
+then 
+        LINE=$LINEA
+        CURSON=$CURSAON
+else 
+        LINEA=$LINE
+        LINE=0
+        CURSON=$CURSBON
+fi
+
+if [ -z $NOSTOP ]; 
+then 
+	NOSTOP=0
+else 
+	NOSTOP=1
+fi;
+
+}
+
+
+#Get command line arguments
+
+if [ -e "$1" ] 
+then 
+    source $1
+else 
+
+#  ===========================   Create the Menu  ======================================================================
+
+    # Below are the menus 
+    
+    # Long commentaries are easier to insert as variables. Let us define them first. 
+    C_partimage="${CURSAON}Easy partimage${RESET} ${TITON}is a script which allows you to quickly and easily 
+    \nset the parameters for partimage which will save an image of your partition
+    \non a local or network drive. 
+    \n\tEasy partimage can be setup as a fully automatic partition saving tool
+    \n\tPlease read the documentation for details${RESET}"
+    
+    C_TRKHELP="In this menu you will find options to online or offline TRK documentation. Please note that any i
+    \ncommand has its own specific manpage. E.g. for help on winpass, type 'man winpass'"
+    C_KEYBOARD="Select your keyboard language here"
+    C_WINPASS="Use winpass to reset your password. Recommended is to just remove the password. This is the most 
+    \nsure method.
+    \nYou can also restore your original password database here."
+    C_MOUNTALLFS="Use this to search and mount all local filesystems on this computer. Filesystems will be mounted in the root according to their device id. 
+    \nE.g. /dev/sda1 will be mounted on /sda1
+    \n(command: mountallfs)"
+    C_UMOUNTALLFS="Unmounts all partitions mounted with the previous command. Make sure no other programs are opened on it anymore
+    \n(command: umountallfs)"
+    C_VIRUSSCAN="Scan your local computer for viruses with 5 different engines and clean them. See the help on 
+    \nvirusscan for more info"
+    C_WINCLEAN="With 'winclean' you can tidy up your Windows PC by getting rid of all sorts of unused files.
+    \nThis can clean up a considerable amount of disk space and speed up your computer."
+    C_MCLONE="Mclone is a powerful utility that permits you to clone an entire computer over the network to i
+    \nmultiple computers at the same time.
+    \nIt uses multicast technology so cloning 1 or 100 computers at a time doesn't make a difference. "
+    C_FILESERVER="This will run a Windows fileserver which will mount and share all of your local disks on your LAN"
+    C_SSHSERVER="Remotely connect to your TRK by means of secure shell. 
+    \nA good windows ssh client would be the free Putty (just google it)
+    \n(command: ssh-server)"
+    C_SETIP="Set an ip address on your first ethernet adapter if you didn't get one from DHCP
+    \n(command: setip eth0)"
+    C_TRKBOOTNET="Run a TRK bootserver to boot other TRKs from your LAN. 
+    \nThis will only work if there are no other bootservers on your LAN and you have a working DHCP server
+    \n(command: trkbootnet)"
+    C_SNIFF="Monitor what's going on on your network.
+    \nRecommend you split the network in 2, hang each side to 1 of 2 network cards on this computer, 
+    \nbridge them together and see what passes
+    \nSo once you've done the physical part, descend into this menu, bring the bridge up and run tcpdump"
+    C_SCRIPT="This uses the 'script' utility to record all output (stdout as well as stderr) of your console to a file.
+    \nThis can be handy when you need to send a bugreport and record the output of the error
+    \nTo return to this menu afterwards, just type 'exit'"
+
+    C_WELCOME="${BLUEFG}${BOLD}Welcome to Trinity Rescue Kit 3.4 build $BUILD ${RESET}
+    \nThis simple menu allows you to perform simple actions that don't require any Linux knowledge and 
+    \ngets things done in a quick and rather dirty way.
+    \nIf you need a command line you can switch to the 5 other consoles by pressing ALT+<F2 to F6> or use 'Go to a shell' below"
+
+    C_AVAST="For this particular AV engine you need a registered, free license key which is sent to you by mail.
+    \n Get it at http://www.avast.com/registration-free-antivirus.php
+    \n If you want to avoid entering the license key each time, it's recommened to run updatetrk
+    \n(command: virusscan -a avs)"
+
+    C_HALT="Power down the computer. At the end you will have a 10 second option to either immediately poweroff, restart or go to a shell
+    \n(command: halt)"
+
+    C_BACKUP="Several utilities that allow you to take a backup of your local disks"
+
+    TITLE="${TITON}   Trinity Rescue Kit easy menu ${RESET}"                                           # Title of the menu
+     
+    test -e /etc/trkmotd && C_MOTD="$C_WELCOME
+    \n${BOLD}`cat /etc/trkmotd`${RESET}"
+    
+
+
+addmenu "A"  "Welcome" "eval NOSTOP=1;" "$C_MOTD"
+addmenu "A"  "TRK Help -->"  "changeMenu B" "$C_TRKHELP"
+addmenu "A"  "Keyboard layout selection -->" "eval NOSTOP=1; drakkeyboard" "$C_KEYBOARD"
+addmenu "A"  "Windows password resetting -->"  "changeMenu C" "$C_WINPASS"
+addmenu "A"  "Mount all local filesystems" "mountallfs" "$C_MOUNTALLFS"
+addmenu "A"  "Unmount all local filesystems" "eval echo \"Unmounting...\"; umountallfs" "$C_UMOUNTALLFS"
+addmenu "A"  "Virus scanning -->" "changeMenu D" "$C_VIRUSSCAN"
+addmenu "A"  "Windows junkfile cleaning -->" "changeMenu E" "$C_WINCLEAN"
+addmenu "A"  "Mclone: computer replication over the network -->" "changeMenu G" "$C_MCLONE"
+addmenu "A"  "Backup and restore utilities-->" "changeMenu I" "$C_BACKUP"
+addmenu "A"  "Run a windows fileserver -->" "changeMenu F" "$C_FILESERVER"
+addmenu "A"  "Run an ssh server" "ssh-server" "$C_SSHSERVER"
+addmenu "A"  "Set an ip-address on the first adapter"  "setip eth0" "$C_SETIP"
+addmenu "A"  "TRK Network boot server" "trkbootnet" "$C_TRKBOOTNET"
+addmenu "A"  "Trinity Remote Support (contact us first)" "eval NOSTOP=1; trinisup" "$C_TRINISUP"
+addmenu "A"  "Ethernet packet sniffing -->" "changeMenu H" "$C_SNIFF"
+addmenu "A"  "Try detecting more harddisk controllers" "tryscsi"
+addmenu "A"  "Try detecting more USB and PCMCIA network adapters" "trypcmcia"
+addmenu "A"  "Midnight Commander" "eval NOSTOP=1; mc" "MC is a well known file manager \n(command: mc)"
+addmenu "A"  "Go to a shell" "eval NOSTOP=1; bash" "To return to this menu afterwards, just type 'exit'"
+addmenu "A"  "Go to a shell and save all output to /tmp/terminal.out" "eval NOSTOP=1; script -a /tmp/terminal.out" "$C_SCRIPT"
+addmenu "A"  "Quit this menu" "exit" "You can always quit with CTRL+C"
+addmenu "A"  "Poweroff computer" "halt" "$C_HALT"
+addmenu "A"  "Reboot without ejecting CD / usb stick" "reboot-no-eject"
+
+addmenu "B"  "<-- Go back to main menu" "changeMenu A"				# Menu B TRK Help
+addmenu "B"  "Offline web help" "trkhelp -l" "(command: trkhelp -l)"
+addmenu "B"  "Offline text help" "trkhelp -l -t" "(command: trkhelp -l -t)"
+addmenu "B"  "Online web help" "trkhelp" "(command: trkhelp)"
+
+addmenu "C"  "<-- Go back to main menu" "changeMenu A"				# Menu C Winpass
+addmenu "C"  "Reset password on built-in Administrator (default action)" "winpass" "(command: winpass)"
+addmenu "C"  "Interactive winpass" "winpass -i" "(command: winpass -i)"
+addmenu "C"  "Winpass with prompt for username first" "winpass-u"
+addmenu "C"  "Restore original password database" "winpass --restore" "(command: winpass --restore)"
+addmenu "C"  "Help on winpass" "man winpass"
+
+addmenu "D"  "<-- Go back to main menu" "changeMenu A"				# Menu D Virusscan
+addmenu "D"  "Set the scan destination (if not set: all local drives)" "destination-prompt"
+addmenu "D"  "Scan with Clam AV" "virusscan -a clam $destination" "(command: virusscan -a clam)"
+addmenu "D"  "Scan with F-Prot" "virusscan -a fprot $destination" "(command: virusscan -a fprot)"
+addmenu "D"  "Scan with BitDefender" "virusscan -a bde $destination" "(command: virusscan -a bde)"
+addmenu "D"  "Scan with Vexira" "virusscan -a va $destination" "(command: virusscan -a va)"
+addmenu "D"  "Scan with Avast (license key needed first)" "virusscan -a avs $destination" "$C_AVAST"
+addmenu "D"  "Help on virusscan" "man virusscan"
+
+addmenu "E"  "<-- Go back to main menu" "changeMenu A"				# Menu E Winclean
+addmenu "E"  "Set the clean destination (if not set: all local drives)" "destination-prompt"
+addmenu "E"  "Safe clean tempfiles (any file older than 1 day in tempfolders" "winclean -s 1 $destination" "(command: winclean -s 1)"
+addmenu "E"  "Clean up all tempfiles" "winclean -R -t $destination" "(command: winclean -R -t)"
+addmenu "E"  "Clean all recycle bins" "winclean -R -r $destination" "(command: winclean -R -r)"
+addmenu "E"  "Remove all uninstall folders from cumulative patches (only effective on XP)" "winclean -R -u $destination" "(command: winclean -R -u)"
+addmenu "E"  "Empty Windows dllcache folder" "winclean -R -c $destination" "(command: winclean -R -c)"
+addmenu "E"  "Remove hanging printerjobs (spoolfiles)" "winclean -R -p $destination" "(command: winclean -R -p)"
+addmenu "E"  "Clean up javacache (Sun java)" "winclean -R -j $destination" "(command: winclean -R -j)"
+addmenu "E"  "CLEAN IN ALL OF THE ABOVE CATEGORIES" "winclean -R -a $destination" "(command: winclean -R -a)"
+addmenu "E"  "Help on winclean" "man winclean"
+
+addmenu "F"  "<-- Go back to main menu" "changeMenu A"
+addmenu "F"  "Run an unsecure fileserver in guest mode" "fileserver -g"	"(command: fileserver -g)"	# Menu F Fileserver
+addmenu "F"  "Run a fileserver with a user and password" "fileserver -s" "(command: fileserver -s)"
+addmenu "F"  "Stop fileserver" "fileserver stop" "(command: fileserver stop)"
+
+addmenu "G"  "<-- Go back to main menu" "changeMenu A"
+addmenu "G"  "Massive Network GHOST" "mango" "(command: mango)"
+addmenu "G"  "Mclone in client mode (receiver)(!)" "mclone" "(command: mclone)"
+addmenu "G"  "Mclone in server mode (sender)" "mclone -s" "(command: mclone -s)"
+addmenu "G"  "Mclone in server mode (sender) with 80Mbit speed limit" "mclone -s -r 80m" "(command: mclone -s -r 80)"
+addmenu "G"  "Get help on mclone" "man mclone"
+
+addmenu "H" "<-- Go back to main menu" "changeMenu A"
+addmenu "H" "Bring up the bridge" "bridge up" "(command: bridge up)"
+addmenu "H" "Bring down the bridge" "bridge down" "(command: bridge down)"
+addmenu "H" "Sniff the traffic" "tcpdump -i eth0" "If you have a lot of traffic, recommend you run tcpdump from the commandline with the appropriate filtersi \n(command: tcpdump -i eth0)"
+
+addmenu "I" "<-- Go back to main menu" "changeMenu A"
+addmenu "I" "Pi - an interactive image backup utility" "pi" "From the same contributors as the simple TRK menu"
+addmenu "I" "Help on pi" "man pi"
+addmenu "I" "Mondoarchive" "mondoarchive" "Backup to any medium using mondo \n(command: mondoarchive)"
+addmenu "I" "Mondorestore" "mondorestore" "Restore from a backup previously made with mondoarchive \n(command: mondorestore)"
+
+
+#
+#    addmenu "A" "TRK Helpx" "changeMenu B" ""                                   # Menu A definition
+#    addmenu "A"  "Partitions utilities" "changeMenu C" ""
+#    addmenu "A"  "ntfs utilities" "changeMenu D"
+#    addmenu "A"  "This menu ${BLUEFG}${BOLD}does nothing${RESET}, just to test colors on and off" "eval NOSTOP=1; ls -l /etc/|more"  "testcomment"
+#    addmenu "A"  "This menu does nothing, ${REDBG}just to test colors on${RESET} and off" "eval NOSTOP=1" ""
+#    addmenu "A"  "Midnight Commander (=Explorer)" "mc"
+#    addmenu "A"  "testdisk" "eval 'NOSTOP=1' ; testdisk"
+#    addmenu "A"  "Recreer un secteur boot (mais pas ntfs)" "ms-sys"
+#    addmenu "A"  "Quit" "exit" "You can quit also with CTRL+C"
+#    
+#    
+#    addmenu "B"  "Go back to main menu" "changeMenu A"                          # Menu B definition
+#    addmenu "B"  "offline web help" "trkhelp -l"
+#    addmenu "B"  "offline text help" "trkhelp -l -t"
+#    addmenu "B"  "online web help" "trkhelp" 
+#    
+#    addmenu "C"  "Go back to main menu" "changeMenu A"
+#    addmenu "C"  "Easy Partimage" "pi"  "$C_partimage"
+#    addmenu "C"  "Standard Partimage" "partimage"
+#    addmenu "C"  "Partitions info" "fdisk -l"
+#    addmenu "C"  "Editeur de partitions graphique ${RESET}(qtparted)" "umountallfs ; qtparted ; mountallfs"
+#    addmenu "C"  "Editeur de partitions en ligne de commande" "cfdisk" 
+#    addmenu "C"  "Chercher les partitions" "run_gpart"
+#    
+#    addmenu "D"  "Go back to main menu" "changeMenu A"
+#    addmenu "D"  "ntfsresize" "ntfsresize"
+#    addmenu "D"  "NTFS qui ne boote pas (Relocntfs)" "relocntfs"
+#    
+    
+    MAINMENU="A"                                                                # Defines the base menu
+  
+    
+# =======================================  End of the menu definition ===========================================================    
+    
+fi    
+    
+changeMenu $MAINMENU 
+
+
+# Special functions for menus 
+
+function run_gpart  {
+
+read -p "device : " toto
+gpart $toto
+}
+
+
+
+# Special fonction for TRK 
+
+
+#if [ ! -e /etc/mountallfstab ]
+#then  
+#    mountallfs
+#fi
+
+# Winpass prompt for username
+
+function winpass-u {
+
+read -p "Username to reset password of: " username
+winpass -u $username
+
+}
+
+function destination-prompt {
+
+read -p "Enter destination(s)(comma separated, no spaces): " dest
+if [ r$dest == r ]; then  
+unset destination
+echo "No destination given, unsetting..."
+else
+destination="-d $dest"
+fi;
+
+}
+
+function ssh-server {
+color ltwhite
+grep "12916" /etc/shadow |grep -q root
+ if [ $? = 0 ]; then
+         echo "TRK still has the default root password 'trk'." 
+         echo "Change it with passwd, run updatetrk and boot from the new TRK if you don't" 
+         echo "want to be prompted for this anymore"
+ echo "For security reasons, before you can run a secure shell server and login remotely, "
+ echo "you have to change your root password now"
+ /usr/bin/passwd root
+ else echo "Non-default root password found, no need to prompt for new one"
+ fi;
+echo "These are the IP-addresses your ssh server will listen to:"
+color ltgreen
+ifconfig | grep "inet addr" | grep -v "127.0.0.1" | cut -d : -f 2 | cut -d " " -f 1
+color off
+echo -n "Starting ssh server..." 
+/usr/sbin/sshd && echo "done"
+}
+# Main program
+
+# Now we are ready to display the menu
+
+while /bin/true                     # main loop
+do
+    clear
+    echo -e $TITLE
+    echo 
+
+    # Display the menu itself
+    LIMIT=${#menu[*]}
+
+    for ((i=0; i < LIMIT ; i++))   # C style : double parenthesis and variable without $
+
+    do			
+            if [ $LINE = $i ]
+            then                
+                echo -ne "${CURSON}"
+                REPEAT="$CURSON"
+            else 
+                REPEAT=""
+            fi
+            #tput cup $(( $i + 3 )) 15          # too slow            
+            option=${menu[$i]/033\[0m/033\[0m${REPEAT}}
+            echo -e " |  $option ${RESET}"
+            REP[$i]=${menu[$i]}	
+            
+    done 
+    
+    # Display the commentary, if any
+    echo
+    echo -e ${menu2[$LINE]}
+
+    # Handle keyboard input
+   
+   
+    read  -s -n1    
+
+    if [ -z $REPLY ]                # ENTER pressed, $REPLY is undefined
+    then
+        ${menu1[$LINE]}             # The command itself
+       
+        if [ $NOSTOP = 1 ]          # don't stop when changing menu
+        then
+            NOSTOP=0
+        else
+            read -p "Press any key to continue" -n1 pause
+        fi   
+
+    else
+
+        if [ $REPLY = $firstcode ]
+        then
+            read  -s -n1 NUM2
+            if [ $NUM2 = "[" ]
+            then
+                read  -s -n1 NUM3
+            
+                case $NUM3 in
+                   
+                    $uparrow) LINE=$(($LINE - 1))
+                         if [ $LINE -lt 0 ]         
+                         then
+                            LINE=0
+                         fi
+                        
+                         continue;;                 # Redisplay the menu with the new selection
+                   
+                    $downarrow) LINE=$(($LINE + 1))                    
+                         if [ $LINE -gt $(($i - 1)) ]             
+                         then
+                            LINE=$(($i-1))
+                         fi
+           
+                         continue;;            # Redisplay the menu with the new selection
+                   
+                    $leftarrow) changeMenu "A"
+           
+                         continue;;                 # Redisplay the main menu
+                                  
+                    *)                   
+                        continue;;      # Invalid key, redisplay the main menu
+                   
+                esac
+            else
+                continue                # Invalid key, redisplay the main menu
+            fi
+        else
+            continue                    # Invalid key, redisplay the main menu
+        fi
+    fi
+   
+   
+done
+

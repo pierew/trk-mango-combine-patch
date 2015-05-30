@@ -1,0 +1,330 @@
+#!/bin/bash
+#
+# Main user interface of MANGO (MAssive Network GhOst).
+# It's an mclone front-end.
+#
+# Valid for mclone v1.2.4 and Trinity Rescue Kit (Mandriva 2005).
+#
+# joan.carles.pineda@upc.edu
+
+# Print commands and their arguments as they are executed:
+# set -x
+
+# Define text color escape sequences:
+VERD="\033[1;32m"
+VERDCLAR="\033[0;32m"
+GROC="\033[1;33m"
+VERMELL="\033[1;31m"
+BLAU="\033[1;34m"
+CIAN="\033[1;36m"
+NORMAL="\033[0;0m"
+
+# Define other escape sequences:
+BEEP="\a"
+
+# Here we configure a valid IP on a valid ethernet interface:
+function ipconf
+{
+	network=192.168.127
+	iptemp=254
+	control=0
+	echo -n 'Trying to get an IP address ...'
+	llista=`ifconfig | grep eth | awk '{print $1}' | wc -l`
+	# Enter if we have any ethernet interface installed:
+	if [ $llista -gt 0 ]
+	    then
+		# Count how many ethernet interfaces have linkbeat:
+		llista=`ifplugstatus | grep eth | grep "link beat detected" | awk '{print $1}' | wc -l`
+		if [ $llista = 0 ]
+		    then
+			# No linkbeat on any ethernet interface:
+			control=2
+		    elif [ $llista = 1 ]
+			then
+			    # Choose the only ethernet interface that has linkbeat:
+			    nic=`ifplugstatus | grep eth | grep "link beat detected" | cut -d":" -f1` 
+		    else
+			# Some ethx with linkbeat, choose the first that has receiving packets:
+			nic=0
+	        	for placa in `ifconfig | grep eth | awk '{print $1}'`
+			    do
+				paquets1=`ifconfig $placa | grep "RX packets" | awk '{print $2}'`
+				# Choose the first of the list that has receiving packets:
+				if [ "$paquets1" != "packets:0" ] && [ "$nic" = "0" ]
+				    then nic=$placa
+				fi
+			    done
+		fi
+	    else
+	    	# No ethernet interfaces found:
+	        control=1
+	fi
+	# If we want to force to use an ethernet interface, uncomment the following line:
+	# nic=ethx
+	if [ $control = 0 ]
+	    then
+		ip=`ifconfig $nic | grep "inet addr" | awk '{print $2}' | sed 's/addr://'`
+		# If the ethx has no IP assignment, try to find a free IP:
+		if [ "$ip" = "" ]
+		    then
+			# Assign a temporary local IP to can do ping command:
+			ifconfig $nic $network.$iptemp/24 up 2> /dev/null
+			finbucle=0
+			while [ $finbucle = 0 ];
+			    do
+			    	# Calcule randomized last byte IP between 1 and 254:
+				ip=$network.`expr 1 + $(($RANDOM%253))`
+				# Send one test packet to the chosen IP:
+				ping $ip -c 1 > /dev/null 2>&1
+				# Query ARP table to check if IP is alive:
+				status=`arp -n | grep $ip | awk '{print $2}'`
+				if [ "$status" = "(incomplete)" ]
+				    then
+				    	# If the IP is free, assign to the ethx:
+					ifconfig $nic $ip/24 up 2> /dev/null
+					finbucle=1
+				fi
+			    done
+		fi
+	fi
+	# Display IP address or network errors:
+	echo -en '\r                                        \r'
+	case $control in
+	    0) echo -e '\rIP = '$GROC$ip$NORMAL'\n';;
+	    1) echo -e $VERMELL'\rNo ethernet interfaces found.\n'$NORMAL
+	       echo -e $GROC'Please, check network interfaces and enable it.\n'$NORMAL;;
+	    2) echo -e $VERMELL'\rNot detected linkbeat on any ethernet interface.\n'$NORMAL
+	       echo -e $GROC'Please, check network cable.\n'$NORMAL;;
+	esac
+	# If we have network errors, exit the program:
+	if [ $control != 0 ]
+	    then 
+		echo -e "Type 'exit' to try again."'\n'
+		exit $control
+	fi 
+}
+	
+# Here we choose if we are sender or receiver:
+function get-mode
+{
+	echo -e 'Operation mode:'
+	echo -e '---------------\n'
+	echo -e '\t- '$VERD'R'$NORMAL'eceiver (default option)\n'
+	echo -e '\t- '$VERD'S'$NORMAL'ender\n'
+	echo -en 'Please, press '$VERD'R'$NORMAL' or '$VERD'Intro'$NORMAL' for Receiver, '$VERD'S'$NORMAL' for Sender: '$CIAN
+	read -n1 mode
+	until [ "$mode" = "r" ] || [ "$mode" = "R" ] || [ "$mode" = "s" ] || [ "$mode" = "S" ] || [ "$mode" = "" ]
+	    do
+		# Beep, comes back 1 character, displays 1 blank space and comes back 1 character.
+		# This makes a beep and the cursor doesn't move when we don't press the correct key:
+		echo -en $BEEP'\b \b'
+		read -n1 mode
+	    done
+	echo -e $NORMAL'\n'
+}
+
+# Here we choose the device to send (disk, partition or bootspt):
+function get-dispositiu
+{
+	echo -e 'Disks, partitions or boot sectors that you can send:'
+	echo -e '----------------------------------------------------\n'
+	OK=1
+	while [ $OK = 1 ]
+	    do
+		for disc in `cat /proc/partitions | awk '{print $4}' | egrep -v '1|2|3|4|5|6|7|8|9|0|name' | sed '1d'`
+		    do 
+			# Capture the disk size:
+			mida=`fdisk -l /dev/$disc | grep $disc: | cut -d" " -f3-`
+			echo -e 'Disk '$VERD$disc$GROC'\t-> '$NORMAL$mida
+			# Check if the disk has partitions:
+			control=`cat /proc/partitions | grep $disc | awk '{print $4}' | egrep '1|2|3|4|5|6|7|8|9|0' | wc -l`
+			if [ $control -gt 0 ]
+			    then
+				# Display column headers of partition parameters:
+				echo -en '\t\t   '  ; fdisk -l /dev/$disc | grep " Id " | cut -d" " -f2-
+				for part in `cat /proc/partitions | grep $disc | awk '{print $4}' | egrep '1|2|3|4|5|6|7|8|9|0'`
+				    do 
+					# Capture partition parameters:
+					parametres=`fdisk -l /dev/$disc | grep $part | cut -d" " -f2-`
+					# Specify "$ parameters" to prevent the "*" causes boot partition screen
+					# print file list of the current directory:
+					echo -e 'Partition '$VERD$part$GROC'\t->\t    '$NORMAL"$parametres"
+				    done
+			fi
+			echo -e '    '$VERD$disc'bootspt'$GROC'\t-> '$NORMAL'To send alone '$disc' boot sectors & partition table.'
+			echo -e ''
+		    done
+		echo -en 'Please, enter the selected disk, partition or boot sectors: '$CIAN
+		read dispositiu
+		# Check if entered device is a correct disk or partition:
+		for opcio in `cat /proc/partitions | awk '{print $4}' | egrep -v 'name' | sed '1d'`
+		   do
+			if [ "$dispositiu" = "$opcio" ]; then OK=0; fi	# It's correct.
+		   done
+		# Check if entered device is boot sectors:
+		for opcio in `cat /proc/partitions | awk '{print $4}' | egrep -v '1|2|3|4|5|6|7|8|9|0|name' | sed '1d'`
+		   do
+			opcio=$opcio'bootspt'
+			if [ "$dispositiu" = "$opcio" ]; then OK=0; fi	# It's correct.
+		   done
+		if [ $OK = 1 ]
+		    then echo -e $BEEP$GROC'\nIncorrect device. The disks, partitions or boot sectors that you can send are:\n'$NORMAL
+		fi
+            done
+        # Check if device is disk, partition or boot sectors to adapt variable to mclone syntax:
+        case ${dispositiu:3:1} in			# Check fourth character of string dispositiu.
+	    '') dispositiu='-d '$dispositiu;;		# device=disk		=> Adapt variable to mclone syntax.
+	    'b') dispositiu='-B -d '${dispositiu:0:3};;	# device=bootspt	=> Adapt variable to mclone syntax.
+	    *) dispositiu='-b -p '$dispositiu;;		# device=partition	=> Adapt variable to mclone syntax.
+	esac
+	echo -e $NORMAL
+}
+
+# Here we choose if we want to use NTFSclone:
+function get-metode
+{
+	echo -e 'Do you want to use NTFSclone for sending data ?'
+	echo -e '---------------------------------------------\n'
+	echo -e '\t- '$VERD'N'$NORMAL'o: more compatible (default option)\n'
+	echo -e '\t- '$VERD'Y'$NORMAL'es: more efficient but not recommended for Vista & W7\n'
+	echo -en 'Please, press '$VERD'N'$NORMAL' or '$VERD'Intro'$NORMAL" to don't use it, "$VERD'Y'$NORMAL' to use it: '$CIAN
+	read -n1 metode
+	until [ "$metode" = "n" ] || [ "$metode" = "N" ] || [ "$metode" = "y" ] || [ "$metode" = "Y" ] || [ "$metode" = "" ]
+	    do
+		# Beep, comes back 1 character, displays 1 blank space and comes back 1 character.
+		# This makes a beep and the cursor doesn't move when we don't press the correct key:
+		echo -en $BEEP'\b \b'
+		read -n1 metode
+	    done
+	if [ "$metode" = "n" ] || [ "$metode" = "N" ] || [ "$metode" = "" ]
+	    then metode="-R"		# Adapt variable to mclone syntax.
+	    else metode=""		# Adapt variable to mclone syntax.
+	fi
+	echo -e $NORMAL'\n'
+}
+
+# Here we choose if we want to send by Multicast or Broadcast:
+function get-difusio
+{
+	echo -e 'Method diffusion for sending data:'
+	echo -e '----------------------------------\n'
+	echo -e '\t- '$VERD'M'$NORMAL'ulticast: more efficient (default option)\n'
+	echo -e '\t- '$VERD'B'$NORMAL'roadcast: more compatible\n'
+	echo -ene 'Please, press '$VERD'M'$NORMAL' or '$VERD'Intro'$NORMAL" for Multicast, "$VERD'B'$NORMAL' for Broascast: '$CIAN
+	read -n1 difusio
+	until [ "$difusio" = "m" ] || [ "$difusio" = "M" ] || [ "$difusio" = "b" ] || [ "$difusio" = "B" ] || [ "$difusio" = "" ]
+	    do
+		# Beep, comes back 1 character, displays 1 blank space and comes back 1 character.
+		# This makes a beep and the cursor doesn't move when we don't press the correct key:
+		echo -en $BEEP'\b \b'
+		read -n1 difusio
+	    done
+	if [ "$difusio" = "b" ] || [ "$difusio" = "B" ]
+	    then difusio="-X"		# Adapt variable to mclone syntax.
+	    else difusio=""		# Adapt variable to mclone syntax.
+	fi
+	echo -e $NORMAL'\n'
+}
+
+# Here we choose the network bitrate:
+function get-velocitat
+{
+	# Define plantilla variable as integer:
+	typeset -i plantilla
+	echo -e 'Network bitrate:'
+	echo -e '----------------\n'
+	OK=1
+	while [ $OK = 1 ]
+	    do
+		echo -en 'Please, enter bitrate in Megabits per second or '$VERD'Intro'$NORMAL' for highest value: '$CIAN
+		read velocitat
+		# Try to convert velocitat (string) to plantilla (integer):
+ 		let plantilla=${velocitat} 2> /dev/null
+ 		# If conversion run OK ($?=0) => velocitat only had numeric characters:
+ 		if [ $? = 0 ] || [ "$velocitat" = "" ]
+ 		    then OK=0
+ 		    else
+ 		        echo -e $BEEP$GROC'\nIncorrect bitrate. You must specify an integer value (Megabits per second).\n'$NORMAL
+ 		fi
+            done
+        if [ "$velocitat" != "" ]
+	    then velocitat='-r '$velocitat'm'		# Adapt variable to mclone syntax.
+	fi
+	echo -e $NORMAL'\n'
+}
+
+# Here we display the chosen sending options and we ask confirmation:
+function ok-options
+{
+	echo -e 'SUMMARY OF SENDING OPTIONS:'
+	echo -e '***************************\n'
+	echo -en 'Disk, partition or boot sectors: '
+	# Interpret syntax of dispositiu variable: Check if it's disk, partition or bootspt:
+	case ${dispositiu:1:1} in			# Check second character of string dispositiu.
+	    d) echo -e $CIAN${dispositiu:3}$NORMAL;;	# Display from 3th position until the end (delete -d).
+	    b) echo -e $CIAN${dispositiu:6}$NORMAL;;	# Display from 6th position until the end (delete -b -p).
+	    B) echo -e $CIAN${dispositiu:6}'bootspt'$NORMAL;;	# Display from 6th position until the end (delete -B -d)
+	esac
+	echo -en 'NTFSclone: '
+	# Interpret syntax of metode variable and display results:
+	if [ "$metode" = "" ]
+	    then echo -e $CIAN'Yes'$NORMAL
+	    else echo -e $CIAN'No'$NORMAL
+	fi
+	echo -en 'Method diffusion: '
+	# Interpret syntax of difusio variable and display results:
+	if [ "$difusio" = "" ]
+	    then echo -e $CIAN'Multicast'$NORMAL
+	    else echo -e $CIAN'Broadcast'$NORMAL
+	fi
+	echo -en 'Network bitrate: '
+	# Interpret syntax of velocitat variable and display results:
+	if [ "$velocitat" = "" ]
+	    then echo -e $CIAN'Top'$NORMAL
+	    else echo -e $CIAN${velocitat:3:`expr ${#velocitat} - 4`}' Mbps'$NORMAL
+	fi
+	# We ask confirmation to start the sending:
+	echo -en '\nDo you want to start the sending ? ('$VERD'Y'$NORMAL'es/'$VERD'N'$NORMAL'o) '$CIAN
+	read -n1 OK
+	until [ "$OK" = "y" ] || [ "$OK" = "Y" ] || [ "$OK" = "n" ] || [ "$mode" = "N" ]
+	    do
+		# Beep, comes back 1 character, displays 1 blank space and comes back 1 character.
+		# This makes a beep and the cursor doesn't move when we don't press the correct key:
+		echo -en $BEEP'\b \b'
+		if [ "$OK" = "" ]
+		    then echo -en $NORMAL'Do you want to start the sending ? ('$VERD'Y'$NORMAL'es/'$VERD'N'$NORMAL'o) '$CIAN
+		fi
+		read -n1 OK
+	    done
+	echo -e $NORMAL'\n'
+}
+
+# Main program:
+while /bin/true
+    do
+	clear
+	echo -e 'Welcome to '$BLAU'MANGO (MAssive Network GhOst) v1.3\n'$NORMAL
+	ipconf
+	get-mode
+	if [ "$mode" = "s" ] || [ "$mode" = "S" ]
+	    then
+	    	get-dispositiu
+	    	get-metode
+	    	get-difusio
+	    	get-velocitat
+	    	ok-options
+	    	if [ "$OK" = "y" ] || [ "$OK" = "Y" ]
+	    	    then
+	    	    	echo -e $VERDCLAR"OK, let's do it!!"$NORMAL'\n'
+	    	    	# Run mclone in sender mode:
+			mclone -s $dispositiu $metode $difusio $velocitat
+		fi
+	    else
+	    	echo -e $VERDCLAR"OK, let's do it!!"$NORMAL'\n'
+	    	# Run mclone in receiver mode:
+	    	mclone		
+	fi
+	echo -en $VERDCLAR'\nPress any key to continue ...'$NORMAL
+	read -n1 foovar
+    done
+

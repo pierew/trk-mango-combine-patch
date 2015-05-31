@@ -119,7 +119,7 @@ for h in $hddrives; do
 	if [ "$TRKLABEL" == "`mlabel -s c: 2>/dev/null | cut -d " " -f 5 | tr -d " "`" ]; then
 		echo $h > /etc/trkhd
 		touch /var/run/runfromhd
-	elif [ "$TRKLABEL" == "`tune2fs -l /dev/$h | grep 'Filesystem volume name' | awk '{print  $4}'`" ]; then
+	elif [ "$TRKLABEL" == "`tune2fs -l /dev/$h 2>/dev/null | grep 'Filesystem volume name' | awk '{print  $4}'`" ]; then
 		echo $h > /etc/trkhd
 		touch /var/run/runfromhd
 	fi
@@ -133,7 +133,7 @@ for h in $hddrives; do
 	if [ "$TRKLABEL" == "`mlabel -s c: 2>/dev/null | cut -d " " -f 5 | tr -d " "`" ]; then
 		echo $h > /etc/trkhd
 		touch /var/run/runfromhd
-	elif [ "$TRKLABEL" == "`tune2fs -l /dev/$h | grep 'Filesystem volume name' | awk '{print  $4}'`" ]; then
+	elif [ "$TRKLABEL" == "`tune2fs -l /dev/$h 2>/dev/null | grep 'Filesystem volume name' | awk '{print  $4}'`" ]; then
 		echo $h > /etc/trkhd
 		touch /var/run/runfromhd
 	fi

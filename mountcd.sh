@@ -110,6 +110,7 @@ fi;
 # Try finding TRK on writable storage
 
 echow "TRK not found on CD, checking harddisks and USB sticks (sleep 5 secs let them settle in)"
+echow "Don't worry when errors of tune2fs occur, it's normal when they scan a non EXT Partition"
 sleep 5
 TRKLABEL=`cat /proc/cmdline | tr " " "\n" | grep -i vollabel | cut -d "=" -f 2`
 if [ r$TRKLABEL == r ]; then TRKLABEL="TRK_3-4"; fi
@@ -119,7 +120,7 @@ for h in $hddrives; do
 	if [ "$TRKLABEL" == "`mlabel -s c: 2>/dev/null | cut -d " " -f 5 | tr -d " "`" ]; then
 		echo $h > /etc/trkhd
 		touch /var/run/runfromhd
-	elif [ "$TRKLABEL" == "`tune2fs -l /dev/$h 2>/dev/null | grep 'Filesystem volume name' | awk '{print  $4}'`" ]; then
+	elif [ "$TRKLABEL" == "`tune2fs -l /dev/$h | grep 'Filesystem volume name' | awk '{print  $4}'`" ]; then
 		echo $h > /etc/trkhd
 		touch /var/run/runfromhd
 	fi

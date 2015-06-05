@@ -1,5 +1,6 @@
-# trk-mango-combine-patch
-A Patch that Combines Mango (Massive Network Ghost) and TRK (Trinity Rescue Disk)
+# trk3.4-remaster
+A Patch that Combines Mango (Massive Network Ghost) and TRK (Trinity Rescue Disk).
+With Added Support of linux Filesystem Boot
 
 Use ISO: http://cdn.pwhl.tk/remasterediso/trinity-rescue-kit.3.4-build-372-mangopatch.iso
 

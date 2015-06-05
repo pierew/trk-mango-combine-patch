@@ -2,7 +2,7 @@
 A Patch that Combines Mango (Massive Network Ghost) and TRK (Trinity Rescue Disk).
 With Added Support of linux Filesystem Boot
 
-Use ISO: http://cdn.pwhl.tk/remasterediso/trinity-rescue-kit.3.4-build-372-mangopatch.iso
+Use ISO: http://cdn.pwhl.tk/remasterediso/trinity-rescue-kit.3.4-build-372-remasterbuild-2.iso
 
 How to Install in Live booted Environment
 ```

@@ -1,0 +1,346 @@
+#!/bin/bash
+#mclone 1.1: Mass Clone, a network multicast disk cloning tool
+#set -x
+test `which echow 2>/dev/null` && ECHOW=echow || ECHOW=echo
+export TMPMCLONE_S=/tmp/.mclone_s
+rm -rf $TMPMCLONE_S 2>/dev/null
+mkdir $TMPMCLONE_S
+export TMPMCLONE_R=/tmp/.mclone_r
+rm -rf $TMPMCLONE_R 2>/dev/null
+mkdir $TMPMCLONE_R
+export SESSIONNR=0
+export TIMEOUT=10
+export VERSION=1.1.1
+export NWCOMPRESS=cat
+export NWUNCOMPRESS=cat
+$ECHOW "Mass Clone $VERSION"
+
+function GetDisks {
+	#We need to exclude the TRK medium from being cloned
+	TRKDISK=0
+	if [ -e /etc/trkhd ]; then TRKDISK=`cat /etc/trkhd | tr -d [:digit:]`; fi
+	for i in `cat /proc/partitions| awk '{print $4}' | egrep -v '1|2|3|4|5|6|7|8|9|0|name'| grep -v $TRKDISK`; 
+	do 
+		export DISKS=`echo $DISKS /dev/$i`;
+		echo $DISKS > $TMPMCLONE_S/disks; 
+	done;
+	} #End function GetDisks
+	
+function GetPartitions {
+	> $TMPMCLONE_S/partitions
+	for i in `cat $TMPMCLONE_S/disks`
+	do 
+		grep `basename $i` /proc/partitions | awk '{print $4}' | egrep '1|2|3|4|5|6|7|8|9|0' >> $TMPMCLONE_S/partitions ; 
+	done;
+	} #GetPartitions
+	
+function GetFS {
+	> $TMPMCLONE_S/filesystems
+	for j in `cat $TMPMCLONE_S/partitions`; do
+		# Add support for raw copying in case of ntfsclone problems
+		if [ r$RAW = ryes ]; then
+		echo  "/dev/$j;other" >> $TMPMCLONE_S/filesystems 
+		else
+		file -s /dev/$j | grep -q extended && echo "/dev/$j;extended" >> $TMPMCLONE_S/filesystems
+		file -s /dev/$j | grep -q NTFS && echo "/dev/$j;ntfs" >> $TMPMCLONE_S/filesystems
+		file -s /dev/$j | egrep -v -q 'NTFS|extended' && echo "/dev/$j;other" >> $TMPMCLONE_S/filesystems
+		fi;
+	done;
+	}  #End function GetFS
+
+function SaveBootsector {
+	for i in `cat $TMPMCLONE_S/disks`
+	do
+		dd if=$i of=$TMPMCLONE_S/bs-`basename $i` count=1 bs=446 2>/dev/null
+	done
+	} #SaveBootsector
+
+function CheckCHS {
+	for i in `grep ntfs $TMPMCLONE_S/filesystems | cut -d ";" -f 1`;
+	do
+		PARTITIONLBA=`ntfsreloc -p $i | grep partition | awk {'print $2'}`
+		NTFSCHS=`ntfsreloc -p $i | grep filesystem | awk {'print $2'}`
+		if [ $PARTITIONLBA != $NTFSCHS ]; 
+		then
+			$ECHOW "Notice: C/H/S and LBA values differ for $i, will attempt to correct on clients"
+			$ECHOW "If you wish to ignore this, run mclone with -c"
+			echo "$i $PARTITIONLBA $NTFSCHS" > $TMPMCLONE_S/chs-`basename $i`
+		fi;
+	done
+	} #CheckCHS	
+function SessionSetup {
+	if [ $SESSIONNR -gt 50 ]; then echo "Session number too high, must be less or equal than 50" && exit 2; fi
+	SESSIONPORTBASE=$[61000+$SESSIONNR*100]
+	SESSIONDATAPORT=$[$SESSIONPORTBASE+2]
+		} #Define SESSIONNR from argument later
+		
+
+while getopts so:i:d:p:n:cbC:t:r:hR name
+do
+
+ case $name in
+	s) MODE=SENDER;;
+	o) MODE=SAVEIMAGE IMGDIR="$OPTARG" && mkdirhier "$IMGDIR" 2>/dev/null;;
+	i) MODE=RESTOREIMAGE IMGDIR="$OPTARG" \
+	&& if [ ! -e "$IMGDIR/clonepack.tar.gz" ]; then echo "clone-client script not found or $IMGDIR doesn 't exist" && exit 1; fi;;
+	d) SKIPGETDISKS=0; 
+	> $TMPMCLONE_S/disks; 
+	for i in `echo $OPTARG| tr "," " "| sed -e 's/\/dev\///'`; 
+		do echo $i >> $TMPMCLONE_S/disks
+	done;;
+	p) SKIPGETPARTITIONS=0; 
+	> $TMPMCLONE_S/partitions 
+	for i in `echo $OPTARG| tr "," " "|  sed -e 's/\/dev\///'`; 
+		do echo $i >> $TMPMCLONE_S/partitions
+	done;;
+	n) SESSIONNR="$OPTARG";;
+	c) SKIPCHECKCHS=0;;
+	b) SKIPSAVEBOOTSECTOR=0;;
+	w) export NWCOMPRESS=gzip; export NWUNCOMPRESS=gunzip;;
+	C) if [ "$OPTARG" = gzip ]; then COMPRESSOR="gzip -c"; COMPRESSION=".gz"; DECOMPRESSOR="zcat"
+	    elif [ "$OPTARG" = bzip2 ]; then COMPRESSOR="bzip2 -c"; COMPRESSION=".bz2"; DECOMPRESSOR="bzcat"
+	    elif [ "$OPTARG" = zipmt ]; then COMPRESSOR="zipmt -"; COMPRESSION=".bz2"; DECOMPRESSOR="bzcat"
+	    elif [ "$OPTARG" = 7-zip ]; then COMPRESSOR="7za a -bd -si"; COMPRESSION=".7z" DECOMPRESSOR="7za e -bd -so"
+	   fi;;
+	t) TIMEOUT=$OPTARG;;
+	r) BITRATE="--max-bitrate $OPTARG";;
+	R) export RAW=yes;;
+	h) 
+echo "mclone version $VERSION
+Usage: mclone sends a disk image over the network via multicast.
+'mclone' without arguments runs in client mode, meaning it will RECEIVE an image from a sender
+-s : SENDER mode. This mode will send the contents of the local harddisks to listening clients
+e.g.: The sender runs 'mclone -s', the clients run 'mclone'. The sender will clone a one to many copy of itself
+-o <path-to-image> : This mode is a RECEIVER mode that stores an image from a sender to image files in the path specified by the argument 'path-to-image'
+e.g.: 'mclone -o /data/xp-image'. Note: the dir does not need to exist, but please erase it when an image is already in there.
+-i path-to-image: This is a SENDER mode that sends an image to clients. You first need to have an image created with mclone -o of course.
+e.g.: 'mclone -i /data/xp-image'
+-n <session number> : Specify as many as 50 sessions when performing multiple cloning. Client and sender need to specify the same number
+e.g. 'mclone -n 5' for client, 'mclone -s -n 5' for sender
+-h: this help screen
+Optional arguments ONLY FROM SENDER MODE:
+-d <disks>: Skip disk detection and specify your own (comma separated if more than one). Only valid for SENDER mode (-s).
+e.g.: 'mclone -s -d /dev/sda,/dev/sdc'
+-p <partitions>: Skip partition detection and specify your  own (comma separated if more than one.) Only valid for SENDER mode (-s).
+e.g.: 'mclone -s -p /dev/sda1,/dev/sda2'
+-c : Skip C/H/S check. This should not be necessary, but if you run into troubles with booting, it might help, although the opposite is more likely to be true
+-b : Skip save bootsector. Should you not want to overwrite your bootsector, add this parameter.
+-t <timeout> : set the timeout between the first client to connect and the last one to ride the train. This option is only used during actual image creation. Default is 10 seconds.
+-r <bitrate> : set the maximum bitrate. Set it in kilobit (k) or megabit (m). This is recommended when you are on a shared lan, because mclone will eat all the available bandwidth.
+e.g.: 'mclone -s -r 80m' sets a maximum of 80 megabit or 10 megabytes per second (which is ok on a 100mbit switch)
+Optional arguments for IMAGE SAVE MODE
+-w : Use network compression. This option uses more CPU but saves bandwidth on your network. Use only on powerful machines. This option is permanent when you store to an image file, i.e. when enabled at image creation it will always be used during restore.
+-C <compressor>: Save your image with compression. 3 compression methods are available (specified as written here): gzip, bzip2 and 7-zip
+e.g. 'mclone -o /data/xp-image -C gzip'
+-R : Raw copy. Ignore filesystem info, copy the raw partitions. This option is slower since it copies the whole partition, including deleted and empty spaces, but is useful for NTFS filesystems on Windows Vista and 7. These tend to give problems when cloning"
+	exit 0;;
+
+ esac
+done
+
+SessionSetup
+
+#Sender mode
+if [ r$MODE = rSENDER ];
+then
+	$ECHOW "Running in sender mode as session number $SESSIONNR"
+	echo "#!/bin/bash" > /tmp/clone2mcast
+	echo "#!/bin/bash" > $TMPMCLONE_S/clone-client
+	if [ r$SKIPGETDISKS != r0 ]; then GetDisks; fi;
+	if [ r$SKIPGETPARTITIONS != r0 ]; then GetPartitions; fi;
+	GetFS
+	if [ r$SKIPCHECKCHS != r0 ]; then CheckCHS; fi;
+	if [ r$SKIPSAVEBOOTSECTOR != r0 ]; then SaveBootsector; fi;
+	# We should now have all the info to create cloning scripts
+	# Run sfdisk except when you only want some partitions to be cloned (not repartioning the disk) 
+	if ! [ r$SKIPGETDISKS != r0 -a r$SKIPGETPARTITIONS = r0 ]; 
+		then
+		for i in `cat $TMPMCLONE_S/disks`; 
+		do sfdisk -d $i > $TMPMCLONE_S/sfdisk-`basename $i`
+		echo "sfdisk --force $i < $TMPMCLONE_R/sfdisk-`basename $i`" >> $TMPMCLONE_S/clone-client
+		done
+	fi;
+	# Write the bootsector
+        cd $TMPMCLONE_S
+	for i in bs-*
+	do
+		echo "dd if=$TMPMCLONE_R/$i of=/dev/`echo $i| cut -d \"-\" -f 2` && \$ECHOW \"Wrote bootsector of `echo $i| cut -d \"-\" -f 2`\"" >> $TMPMCLONE_S/clone-client
+		echo "sleep 5" >> $TMPMCLONE_S/clone-client
+	done;
+	# Make clone commands for both sides
+	cat $TMPMCLONE_S/filesystems | while read i
+		do
+		# Set the sender and receiver commands here and augment their port for each partition so no sessions can get mixed
+		SENDERCMD="udp-sender --portbase $SESSIONDATAPORT --min-wait 10 --max-wait $TIMEOUT $BITRATE --nokbd"
+		RECEIVERCMD="udp-receiver --portbase $SESSIONDATAPORT --nokbd"
+		SESSIONDATAPORT=$[$SESSIONDATAPORT+2]
+		j=$(echo $i | cut -d ";" -f 1)
+		echo $j
+		PARTSIZE=$(lsblk | grep $(echo $j | cut -d"/" -f3) | awk '{print $4}' | head -n1)
+		echo $PARTSIZE
+		# Sender clone commands (write commands for direct multicast as well as for image creation)
+		echo $i | grep -q ntfs && j=`echo $i | cut -d ";" -f 1` && \
+		echo "$ECHOW \"Sending $j with ntfsclone\"" >> /tmp/clone2mcast && \
+		echo "ntfsclone --force --save-image --output - $j | pv | $NWCOMPRESS | $SENDERCMD" >> /tmp/clone2mcast
+		echo $i | grep -q other && j=`echo $i | cut -d ";" -f 1`  && \
+		echo "$ECHOW \"Sending $j with dd\"" >> /tmp/clone2mcast && \
+		echo "dd if=$j bs=1024k | pv -s$PARTSIZE | $NWCOMPRESS | $SENDERCMD &>/dev/null" >> /tmp/clone2mcast 
+		# Client clone commands
+		echo $i | grep -q ntfs && j=`echo $i | cut -d ";" -f 1` && \
+		echo "$ECHOW \"Restoring to $j with ntfsclone\"" >> $TMPMCLONE_S/clone-client && \
+		echo "$RECEIVERCMD | $NWUNCOMPRESS | pv | ntfsclone --force --restore-image --overwrite $j - " >> $TMPMCLONE_S/clone-client
+		echo $i | grep -q other && j=`echo $i | cut -d ";" -f 1`  && \
+		echo "$ECHOW \"Restoring to $j with dd\"" >> $TMPMCLONE_S/clone-client && \
+		echo "$RECEIVERCMD | $NWUNCOMPRESS | pv -s$PARTSIZE | dd of=$j bs=1024k"  >> $TMPMCLONE_S/clone-client
+		# Image saving. We don't know what compression the receiving end will use, so we only give filename.
+		echo $i | grep -q ntfs && j=`echo $i | cut -d ";" -f 1` && IMGFILE=`basename $j`.ntfs.img && \
+		echo "$IMGFILE" >> $TMPMCLONE_S/clone2file
+		echo $i | grep -q other && j=`echo $i | cut -d ";" -f 1`  && IMGFILE=`basename $j`.dd.img  && \
+		echo "$IMGFILE" >> $TMPMCLONE_S/clone2file
+		
+	done;
+	# Write correct CHS values if necessary
+	# Run ntfsreloc for all partitions that need it
+	
+		ls $TMPMCLONE_S/chs-* > /dev/null 2>&1 && for i in $TMPMCLONE_S/chs-*;
+		# Watch out when changing TMPMCLONE_S: do not use hyphens (-) in variable name as cut will see it as its field delimiter
+		do
+			j=`echo $i | cut -d "-" -f 2`
+			echo "sleep 1" >> $TMPMCLONE_S/clone-client
+			echo "$ECHOW \"Correcting CHS values on /dev/$j\"" >> $TMPMCLONE_S/clone-client
+			echo "ntfsreloc -w -h `cat $i | awk '{print $3}'` -t 63 /dev/$j" >> $TMPMCLONE_S/clone-client
+						touch /tmp/.sfdiskchs-`echo $j | tr -d [:digit:]`
+		done 
+	
+		# Run sfdisk only once for the base disk
+		ls -a /tmp/.sfdiskchs-* > /dev/null 2>&1 && for i in /tmp/.sfdiskchs-*
+		do
+			j=`echo $i | cut -d "-" -f 2` # Get whole disk device name
+			k=`cat $TMPMCLONE_S/chs-$j*| head -n 1 | awk '{print $3}'` # Heads value for partition
+			echo "sleep 1" >> $TMPMCLONE_S/clone-client
+			echo "sfdisk -f --no-reread -H $k /dev/$j < $TMPMCLONE_S/sfdisk-$j" >> $TMPMCLONE_S/clone-client
+			chmod +x $TMPMCLONE_S/clone-client
+			#rm -f $i
+		done
+	
+
+	cd /tmp
+	$ECHOW "Packing cloning information and scripts for client"
+	rm -f clonepack_s.tar.gz &>/dev/null
+        cd $TMPMCLONE_S
+	tar czf ../clonepack_s.tar.gz . &> /dev/null
+	$ECHOW "Press enter when all clients have connected"
+	udp-sender --file /tmp/clonepack_s.tar.gz --portbase $SESSIONPORTBASE || exit 1
+	rm -f /tmp/clonepack_s.tar.gz &>/dev/null
+	$ECHOW "Clients have received partitioning/bootsector information"
+	$ECHOW "Waiting a few seconds for clients to execute this info"
+	sleep 5
+	$ECHOW "Starting the actual cloning"
+	chmod +x /tmp/clone2mcast
+	/tmp/clone2mcast
+	rm -rf $TMPMCLONE_S
+	rm -f /tmp/clone2mcast &>/dev/null
+fi;
+
+#Save Image mode
+if [ r$MODE = rSAVEIMAGE ];
+	then
+	cd "$IMGDIR"
+	$ECHOW "Running in image save mode as session number $SESSIONNR"
+	test "r$COMPRESSOR" = r || $ECHOW "Shrinking with $COMPRESSOR compression"
+	$ECHOW "Saving image files in folder $IMGDIR"
+	udp-receiver --file clonepack.tar.gz --portbase $SESSIONPORTBASE || exit 1
+	cd $TMPMCLONE_R
+	tar xzf $OLDPWD/clonepack.tar.gz
+	mv -f $TMPMCLONE_R/clone2file $OLDPWD
+	cd $OLDPWD
+	echo "#!/bin/bash" > file2mcast
+	chmod +x file2mcast
+	if [ "r$COMPRESSION" = r ]; then
+	 cat clone2file | while read IMGFILE;
+		do
+		function RECEIVERCMD {
+		 udp-receiver --portbase $SESSIONDATAPORT --nokbd | $NWUNCOMPRESS
+		} # RECEIVERCMD
+		SENDERCMD="udp-sender --portbase $SESSIONDATAPORT --min-wait 10 --max-wait $TIMEOUT  --nokbd"
+
+		$ECHOW "Starting transfer to $IMGDIR/$IMGFILE"
+		RECEIVERCMD > $IMGFILE && \
+		# Image restore commands. No need to ntfsclone or dd here, receiver will do that.
+		# Restore script will only be created after a successfull clone
+		echo "$ECHOW \"Sending $IMGFILE to multicast\"" >> file2mcast
+		echo "cat $IMGFILE | $SENDERCMD \$BITRATE" >> file2mcast
+		SESSIONDATAPORT=$[$SESSIONDATAPORT+2]
+	 	done
+	elif [ "r$COMPRESSION" = r.7z ]; then
+	 cat clone2file | while read IMGFILE;
+		do
+		function RECEIVERCMD {
+		udp-receiver --portbase $SESSIONDATAPORT --nokbd | $NWUNCOMPRESS
+		} # RECEIVERCMD
+		SENDERCMD="udp-sender --portbase $SESSIONDATAPORT --min-wait 10 --max-wait $TIMEOUT --nokbd"
+		$ECHOW "Starting transfer to $IMGDIR/$IMGFILE$COMPRESSION"
+		RECEIVERCMD | $COMPRESSOR $IMGFILE$COMPRESSION && \
+		# Image restore commands. No need to ntfsclone or dd here, receiver will do that.
+		# Restore script will only be created after a successfull clone
+		echo "$ECHOW \"Sending $IMGFILE$COMPRESSION to multicast\"" >> file2mcast
+		echo "$DECOMPRESSOR $IMGFILE$COMPRESSION | $SENDERCMD \$BITRATE" >> file2mcast
+		SESSIONDATAPORT=$[$SESSIONDATAPORT+2]
+		done
+	else  
+		cat clone2file | while read IMGFILE;
+		do
+		function RECEIVERCMD {
+		udp-receiver --portbase $SESSIONDATAPORT --nokbd | $NWUNCOMPRESS
+		} # RECEIVERCMD
+		SENDERCMD="udp-sender --portbase $SESSIONDATAPORT --min-wait 10 --max-wait $TIMEOUT --nokbd"
+		$ECHOW "Starting transfer to $IMGDIR/$IMGFILE$COMPRESSION"
+		# Do not unnecessarily decompress and recompress when gzip is used
+		if [ r$NWUNCOMPRESS = rgunzip -a "r$COMPRESSOR" = "rgzip -c" ]; 
+		then
+		udp-receiver --portbase $SESSIONDATAPORT --nokbd  > $IMGFILE$COMPRESSION;
+		else
+		RECEIVERCMD | $COMPRESSOR > $IMGFILE$COMPRESSION 
+		fi;
+		# Image restore commands. No need to ntfsclone or dd here, receiver will do that.
+		# Restore script will only be created after a successfull clone
+		echo "$ECHOW \"Sending $IMGFILE$COMPRESSION to multicast\"" >> file2mcast
+		echo "$DECOMPRESSOR $IMGFILE$COMPRESSION | $SENDERCMD \$BITRATE" >> file2mcast 
+		SESSIONDATAPORT=$[$SESSIONDATAPORT+2]
+		done
+	fi; 
+
+	rm -rf $TMPMCLONE_R
+fi;
+
+# Restore Image Mode
+if [ r$MODE = rRESTOREIMAGE ];
+	then
+	if [ r$NWCOMPRESS = rgzip ]; then echo "Network compression ignored in image mode"; fi
+	cd "$IMGDIR"
+	$ECHOW "Running in image restore mode as session number $SESSIONNR"
+	$ECHOW "Starting multicast restore from image"
+	$ECHOW "Press enter when all clients have connected"
+	udp-sender --file clonepack.tar.gz --portbase $SESSIONPORTBASE
+	$ECHOW "Clients have received partitioning/bootsector information"
+	$ECHOW "Waiting a few seconds for clients to execute this info"
+	sleep 5
+	. ./file2mcast
+fi;
+	
+
+#This is the client mode
+if [ r$MODE = r ];
+	then
+	SessionSetup
+	cd /
+	$ECHOW "Running in client mode as session number $SESSIONNR"
+	udp-receiver --file /tmp/clonepack_r.tar.gz --portbase $SESSIONPORTBASE || exit 1
+        cd $TMPMCLONE_R
+	tar xzf /tmp/clonepack_r.tar.gz &>/dev/null
+	cd /
+	. $TMPMCLONE_R/clone-client 
+	rm -rf $TMPMCLONE_R
+	rm -f /tmp/clonepack_r.tar.gz &>/dev/null
+fi;
+

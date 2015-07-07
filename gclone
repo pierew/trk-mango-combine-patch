@@ -1,0 +1,142 @@
+#!/bin/bash
+#gclone 1.1: GPT Clone, a network multicast disk cloning tool
+#set -x
+test `which echow 2>/dev/null` && ECHOW=echow || ECHOW=echo
+export TMPGCLONE_S=/tmp/.gclone_s
+rm -rf $TMPGCLONE_S 2>/dev/null
+mkdir $TMPGCLONE_S
+export TMPGCLONE_R=/tmp/.gclone_r
+rm -rf $TMPGCLONE_R 2>/dev/null
+mkdir $TMPGCLONE_R
+export SESSIONNR=0
+export TIMEOUT=10
+export VERSION=1.1.1
+export NWCOMPRESS=cat
+export NWUNCOMPRESS=cat
+$ECHOW "Mass Clone $VERSION"
+
+function GetDisks {
+	#We need to exclude the TRK medium from being cloned
+	TRKDISK=0
+	if [ -e /etc/trkhd ]; then TRKDISK=`cat /etc/trkhd | tr -d [:digit:]`; fi
+	for i in `cat /proc/partitions| awk '{print $4}' | egrep -v '1|2|3|4|5|6|7|8|9|0|name'| grep -v $TRKDISK`; 
+	do 
+		export DISKS=`echo $DISKS /dev/$i`;
+		echo $DISKS > $TMPGCLONE_S/disks; 
+	done;
+	} #End function GetDisks
+	
+function GetPartitions {
+	> $TMPGCLONE_S/partitions
+	for i in `cat $TMPGCLONE_S/disks`
+	do 
+		grep `basename $i` /proc/partitions | awk '{print $4}' | egrep '1|2|3|4|5|6|7|8|9|0' >> $TMPGCLONE_S/partitions ; 
+	done;
+	} #GetPartitions
+	
+function SessionSetup {
+	if [ $SESSIONNR -gt 50 ]; then echo "Session number too high, must be less or equal than 50" && exit 2; fi
+	SESSIONPORTBASE=$[61000+$SESSIONNR*100]
+	SESSIONDATAPORT=$[$SESSIONPORTBASE+2]
+		} #Define SESSIONNR from argument later
+
+while getopts so:i:d:p:n:cbC:t:r:hR name
+do
+
+ case $name in
+	s) MODE=SENDER;;
+	d) SKIPGETDISKS=0; 
+	> $TMPGCLONE_S/disks; 
+	for i in `echo $OPTARG| tr "," " "| sed -e 's/\/dev\///'`; 
+		do echo $i >> $TMPGCLONE_S/disks
+	done;;
+	p) SKIPGETPARTITIONS=0; 
+	> $TMPGCLONE_S/partitions 
+	for i in `echo $OPTARG| tr "," " "|  sed -e 's/\/dev\///'`; 
+		do echo $i >> $TMPGCLONE_S/partitions
+	done;;
+	w) export NWCOMPRESS=gzip; export NWUNCOMPRESS=gunzip;;
+	C) if [ "$OPTARG" = gzip ]; then COMPRESSOR="gzip -c"; COMPRESSION=".gz"; DECOMPRESSOR="zcat"
+	    elif [ "$OPTARG" = bzip2 ]; then COMPRESSOR="bzip2 -c"; COMPRESSION=".bz2"; DECOMPRESSOR="bzcat"
+	    elif [ "$OPTARG" = zipmt ]; then COMPRESSOR="zipmt -"; COMPRESSION=".bz2"; DECOMPRESSOR="bzcat"
+	    elif [ "$OPTARG" = 7-zip ]; then COMPRESSOR="7za a -bd -si"; COMPRESSION=".7z" DECOMPRESSOR="7za e -bd -so"
+	   fi;;
+	t) TIMEOUT=$OPTARG;;
+	r) BITRATE="--max-bitrate $OPTARG";;
+	R) export RAW=yes;;
+	h) 
+echo "gclone version $VERSION
+Usage: gclone sends a disk image over the network via multicast.
+'gclone' without arguments runs in client mode, meaning it will RECEIVE an image from a sender
+-s : SENDER mode. This mode will send the contents of the local harddisks to listening clients
+e.g.: The sender runs 'gclone -s', the clients run 'gclone'. The sender will clone a one to many copy of itself
+-h: this help screen"
+	exit 0;;
+
+ esac
+done
+
+SessionSetup
+GetDisks
+GetPartitions
+#Sender mode
+if [ r$MODE = rSENDER ];
+then
+	$ECHOW "Running in sender mode as session number $SESSIONNR"
+	echo "#!/bin/bash" > /tmp/clone2mcast
+	echo "#!/bin/bash" > $TMPGCLONE_S/clone-client
+	# Make clone commands for both sides
+	cat $TMPGCLONE_S/disks | while read i
+		do
+		# Set the sender and receiver commands here and augment their port for each partition so no sessions can get mixed
+		SENDERCMD="udp-sender --portbase $SESSIONDATAPORT --min-wait 10 --max-wait $TIMEOUT $BITRATE --nokbd"
+		RECEIVERCMD="udp-receiver --portbase $SESSIONDATAPORT --nokbd"
+		SESSIONDATAPORT=$[$SESSIONDATAPORT+2]
+		#DISK=$(echo $i | cut -d ";" -f 1)
+		#DISKSIZE=$(lsblk | grep $(echo $DISK | cut -d"/" -f3) | awk '{print $4}' | head -n1)
+		#echo $DISKSIZE
+		# Sender clone commands (write commands for direct multicast as well as for image creation)
+		echo "$ECHOW \"Sending $i with dd\"" >> /tmp/clone2mcast && \
+		echo "dd if=$i bs=1024k | $NWCOMPRESS | $SENDERCMD &>/dev/null" >> /tmp/clone2mcast 
+		
+		# Client clone commands
+		echo "$ECHOW \"Restoring to $i with dd\"" >> $TMPGCLONE_S/clone-client && \
+		echo "$RECEIVERCMD | $NWUNCOMPRESS | dd of=$i bs=1024k"  >> $TMPGCLONE_S/clone-client
+		
+	done;
+	
+	
+
+	cd /tmp
+	$ECHOW "Packing cloning information and scripts for client"
+	rm -f clonepack_s.tar.gz &>/dev/null
+        cd $TMPGCLONE_S
+	tar czf ../clonepack_s.tar.gz . &> /dev/null
+	$ECHOW "Press enter when all clients have connected"
+	udp-sender --file /tmp/clonepack_s.tar.gz --portbase $SESSIONPORTBASE || exit 1
+	rm -f /tmp/clonepack_s.tar.gz &>/dev/null
+	$ECHOW "Clients have received partitioning/bootsector information"
+	$ECHOW "Waiting a few seconds for clients to execute this info"
+	sleep 5
+	$ECHOW "Starting the actual cloning"
+	chmod +x /tmp/clone2mcast
+	/tmp/clone2mcast
+	rm -rf $TMPGCLONE_S
+	rm -f /tmp/clone2mcast &>/dev/null
+fi;
+
+#This is the client mode
+if [ r$MODE = r ];
+	then
+	SessionSetup
+	cd /
+	$ECHOW "Running in client mode as session number $SESSIONNR"
+	udp-receiver --file /tmp/clonepack_r.tar.gz --portbase $SESSIONPORTBASE || exit 1
+        cd $TMPGCLONE_R
+	tar xzf /tmp/clonepack_r.tar.gz &>/dev/null
+	cd /
+	. $TMPGCLONE_R/clone-client 
+	rm -rf $TMPGCLONE_R
+	rm -f /tmp/clonepack_r.tar.gz &>/dev/null
+fi;
+
